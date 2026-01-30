@@ -345,7 +345,7 @@ class RedisWriteCache:
             )
 
             # Check queue size (warning only, not blocking)
-            queue_size = self._redis.zcard(self._pending_key)
+            queue_size: int | None = self._redis.zcard(self._pending_key)  # type: ignore[assignment]
             if queue_size and queue_size > self.config.max_pending_writes:
                 logger.warning(
                     "Write cache backlog: %d pending writes! "
@@ -382,7 +382,7 @@ class RedisWriteCache:
             if checkpoint_id:
                 # Get specific checkpoint
                 data_key = self._make_data_key(thread_id, checkpoint_ns, checkpoint_id)
-                data = self._redis.get(data_key)
+                data: bytes | None = self._redis.get(data_key)  # type: ignore[assignment]
 
                 if data:
                     with self._metrics_lock:
@@ -403,11 +403,12 @@ class RedisWriteCache:
                 # SCAN is Valkey compatible
                 cursor: int = 0
                 while True:
-                    cursor, batch = self._redis.scan(
+                    scan_result: tuple[int, list[bytes]] = self._redis.scan(  # type: ignore[assignment]
                         cursor=cursor,
                         match=pattern,
                         count=100,
                     )
+                    cursor, batch = scan_result
                     keys.extend(batch)
                     if cursor == 0:
                         break
@@ -474,13 +475,15 @@ class RedisWriteCache:
         deleted = 0
         cursor: int = 0
         while True:
-            cursor, keys = self._redis.scan(
+            scan_result: tuple[int, list[bytes]] = self._redis.scan(  # type: ignore[assignment]
                 cursor=cursor,
                 match=pattern,
                 count=100,
             )
+            cursor, keys = scan_result
             if keys:
-                deleted += self._redis.delete(*keys)
+                del_count: int = self._redis.delete(*keys)  # type: ignore[assignment]
+                deleted += del_count
             if cursor == 0:
                 break
 
@@ -587,7 +590,7 @@ class RedisWriteCache:
         """
         # Get oldest pending checkpoints from queue
         # ZRANGE with WITHSCORES is Valkey compatible
-        items = self._redis.zrange(
+        items: list[tuple[bytes, float]] = self._redis.zrange(  # type: ignore[assignment]
             self._pending_key,
             0,  # Start index
             self.config.batch_size - 1,  # End index
@@ -601,7 +604,7 @@ class RedisWriteCache:
         pipe = self._redis.pipeline()
         for key, _score in items:
             pipe.get(key)
-        values = pipe.execute()
+        values: list[bytes | None] = pipe.execute()  # type: ignore[assignment]
 
         # Deserialize checkpoints
         checkpoints: list[tuple[bytes, dict[str, Any]]] = []
@@ -751,7 +754,7 @@ class RedisWriteCache:
         pending_count = self._redis.zcard(self._pending_key) or 0
 
         # Get oldest pending timestamp
-        oldest = self._redis.zrange(
+        oldest: list[tuple[bytes, float]] = self._redis.zrange(  # type: ignore[assignment]
             self._pending_key,
             0,
             0,

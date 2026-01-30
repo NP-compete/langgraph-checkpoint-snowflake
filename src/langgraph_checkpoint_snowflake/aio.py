@@ -1012,10 +1012,11 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
             while True:
                 try:
                     coro = anext(aiter_)
-                    yield asyncio.run_coroutine_threadsafe(
-                        coro,
+                    future = asyncio.run_coroutine_threadsafe(
+                        coro,  # type: ignore[arg-type]
                         self.loop,
-                    ).result()
+                    )
+                    yield future.result()
                 except StopAsyncIteration:
                     break
 
