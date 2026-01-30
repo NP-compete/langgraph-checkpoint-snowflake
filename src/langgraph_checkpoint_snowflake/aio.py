@@ -13,6 +13,7 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
@@ -1012,9 +1013,11 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
             while True:
                 try:
                     coro = anext(aiter_)
-                    future = asyncio.run_coroutine_threadsafe(
-                        coro,  # type: ignore[arg-type]
-                        self.loop,
+                    future: concurrent.futures.Future[CheckpointTuple] = (
+                        asyncio.run_coroutine_threadsafe(
+                            coro,  # type: ignore[arg-type]
+                            self.loop,
+                        )
                     )
                     yield future.result()
                 except StopAsyncIteration:
