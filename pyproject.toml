@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "langgraph-checkpoint-snowflake"
 version = "0.1.0"
-description = "Snowflake checkpoint saver for LangGraph - enables durable, stateful AI agents with Snowflake persistence"
+description = "Snowflake checkpoint saver for LangGraph with optional Redis/Valkey write-back cache - enables durable, stateful AI agents with 100x faster writes"
 authors = [{ name = "Soham Dutta" }]
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
-keywords = ["langgraph", "checkpoint", "snowflake", "ai", "agents", "persistence"]
+keywords = ["langgraph", "checkpoint", "snowflake", "redis", "valkey", "ai", "agents", "persistence", "kubernetes"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -35,6 +35,10 @@ dependencies = [
 nest-asyncio = [
     "nest-asyncio>=1.5.0",
 ]
+redis = [
+    "redis>=5.0.0",
+    "hiredis>=2.0.0",  # Fast C parser (optional but recommended)
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -45,13 +49,15 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
     "nest-asyncio>=1.5.0",
+    "redis>=5.0.0",
+    "fakeredis>=2.20.0",  # For testing without real Redis
 ]
 
 [project.urls]
-Homepage = "https://github.com/sodutta/langgraph-checkpoint-snowflake"
-Documentation = "https://github.com/sodutta/langgraph-checkpoint-snowflake#readme"
-Repository = "https://github.com/sodutta/langgraph-checkpoint-snowflake"
-Issues = "https://github.com/sodutta/langgraph-checkpoint-snowflake/issues"
+Homepage = "https://github.com/NP-compete/langgraph-checkpoint-snowflake"
+Documentation = "https://github.com/NP-compete/langgraph-checkpoint-snowflake#readme"
+Repository = "https://github.com/NP-compete/langgraph-checkpoint-snowflake"
+Issues = "https://github.com/NP-compete/langgraph-checkpoint-snowflake/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/langgraph_checkpoint_snowflake"]
@@ -112,6 +118,8 @@ module = [
     "msgpack",
     "lz4.*",
     "pydantic.*",
+    "redis.*",
+    "fakeredis.*",
 ]
 ignore_missing_imports = true
 

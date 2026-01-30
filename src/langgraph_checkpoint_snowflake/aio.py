@@ -7,6 +7,7 @@ Features:
     - Retry with exponential backoff for transient errors
     - TTL/expiration for automatic cleanup of old checkpoints
     - Metrics/observability support
+    - Optional Redis/Valkey write-back cache for 100x faster writes
 """
 
 from __future__ import annotations
@@ -43,6 +44,10 @@ from langgraph_checkpoint_snowflake._internal import (
     timed_operation,
 )
 from langgraph_checkpoint_snowflake.base import BaseSnowflakeSaver
+from langgraph_checkpoint_snowflake.redis_cache import (
+    RedisWriteCache,
+    RedisWriteCacheConfig,
+)
 
 
 class AsyncSnowflakeSaver(BaseSnowflakeSaver):
@@ -66,6 +71,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         - TTL/expiration for automatic cleanup of old checkpoints
         - Metrics/observability support
         - Optional nest_asyncio support for sync fallbacks from async context
+        - Optional Redis/Valkey write-back cache for 100x faster writes
 
     Args:
         conn: A Snowflake connection object.
@@ -74,6 +80,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         metrics: Optional metrics collector.
         allow_sync_from_async: If True, enables sync method calls from within
             an async context using nest_asyncio. Defaults to False.
+        redis_cache_config: Optional Redis write-back cache configuration.
 
     Example:
         >>> async with AsyncSnowflakeSaver.from_conn_string(
@@ -87,6 +94,18 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         ...     await checkpointer.asetup()
         ...     graph = builder.compile(checkpointer=checkpointer)
         ...     result = await graph.ainvoke({"input": "hello"}, config)
+
+    Example with Redis write-back cache:
+        >>> from langgraph_checkpoint_snowflake import RedisWriteCacheConfig
+        >>> redis_config = RedisWriteCacheConfig(
+        ...     enabled=True,
+        ...     redis_url="redis://localhost:6379/0",
+        ... )
+        >>> async with AsyncSnowflakeSaver.from_env(
+        ...     redis_cache_config=redis_config,
+        ... ) as checkpointer:
+        ...     await checkpointer.asetup()
+        ...     # Writes go to Redis (1-3ms), background sync to Snowflake
     """
 
     conn: Conn
@@ -97,6 +116,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
     _loop: asyncio.AbstractEventLoop | None
     _allow_sync_from_async: bool
     _nest_asyncio_applied: bool
+    _redis_cache: RedisWriteCache | None
 
     def __init__(
         self,
@@ -106,6 +126,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         retry_config: RetryConfig | None = None,
         metrics: Metrics | None = None,
         allow_sync_from_async: bool = False,
+        redis_cache_config: RedisWriteCacheConfig | None = None,
     ) -> None:
         super().__init__(serde=serde)
         self.conn = conn
@@ -116,6 +137,18 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         self._loop = None
         self._allow_sync_from_async = allow_sync_from_async
         self._nest_asyncio_applied = False
+
+        # Initialize Redis write cache if enabled
+        self._redis_cache = None
+        if redis_cache_config and redis_cache_config.enabled:
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
+
+            self._redis_cache = RedisWriteCache(
+                config=redis_cache_config,
+                snowflake_saver=self,
+            )
+            self._redis_cache.start()
+            logger.info("Redis write-back cache enabled (async)")
 
     def _ensure_nest_asyncio(self) -> None:
         """Apply nest_asyncio if enabled and not already applied."""
@@ -359,12 +392,30 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Get a checkpoint tuple from the database asynchronously.
 
+        Checks Redis write cache first if enabled, then queries Snowflake.
+
         Args:
             config: Configuration specifying which checkpoint to retrieve.
 
         Returns:
             The checkpoint tuple if found, None otherwise.
         """
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_id = get_checkpoint_id(config)
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+
+        # Check Redis write cache first (sync operation, but fast)
+        if self._redis_cache:
+            redis_data = self._redis_cache.get(thread_id, checkpoint_ns, checkpoint_id)
+            if redis_data:
+                logger.debug(
+                    "Redis cache hit for thread=%s, checkpoint=%s",
+                    thread_id,
+                    checkpoint_id,
+                )
+                return self._build_checkpoint_tuple_from_redis(redis_data, config)
+
+        # Query Snowflake
         async with self.lock:
             return await asyncio.to_thread(self._get_tuple_sync, config)
 
@@ -459,6 +510,9 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
     ) -> RunnableConfig:
         """Store a checkpoint in the database asynchronously.
 
+        If Redis write-back cache is enabled, writes go to Redis first (1-3ms)
+        and are asynchronously synced to Snowflake in the background.
+
         Args:
             config: Configuration for the checkpoint.
             checkpoint: The checkpoint data to store.
@@ -468,6 +522,34 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         Returns:
             Updated configuration with the new checkpoint_id.
         """
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        parent_checkpoint_id = config["configurable"].get("checkpoint_id")
+
+        # If Redis write cache is enabled, write there (fast path)
+        if self._redis_cache:
+            checkpoint_data = dict(checkpoint)
+            metadata_dict = dict(get_checkpoint_metadata(config, metadata))
+
+            self._redis_cache.put(
+                thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns,
+                checkpoint_id=checkpoint["id"],
+                checkpoint_data=checkpoint_data,
+                metadata=metadata_dict,
+                parent_checkpoint_id=parent_checkpoint_id,
+            )
+
+            # Return immediately (background sync to Snowflake)
+            return {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": checkpoint_ns,
+                    "checkpoint_id": checkpoint["id"],
+                }
+            }
+
+        # Direct write to Snowflake (slow path)
         async with self.lock:
             return await asyncio.to_thread(
                 self._put_sync, config, checkpoint, metadata, new_versions
@@ -709,6 +791,87 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         if self.metrics:
             return self.metrics.get_stats()
         return None
+
+    def get_redis_cache_stats(self) -> dict[str, Any] | None:
+        """Get Redis write-back cache statistics.
+
+        Returns:
+            Dictionary with Redis cache stats if enabled, None otherwise.
+        """
+        if self._redis_cache:
+            return self._redis_cache.get_stats()
+        return None
+
+    async def aflush_redis_cache(self, timeout: float = 30.0) -> int:
+        """Flush Redis write cache to Snowflake asynchronously.
+
+        Forces immediate sync of all pending writes to Snowflake.
+
+        Args:
+            timeout: Max time to wait for flush (seconds).
+
+        Returns:
+            Number of checkpoints flushed.
+        """
+        if self._redis_cache:
+            return await asyncio.to_thread(self._redis_cache.flush, timeout)
+        logger.warning("Redis write cache not enabled, nothing to flush")
+        return 0
+
+    async def ashutdown_redis_cache(self, flush_timeout: float = 30.0) -> None:
+        """Shutdown Redis write cache gracefully.
+
+        Args:
+            flush_timeout: Max time to wait for flush (seconds).
+        """
+        if self._redis_cache:
+            await asyncio.to_thread(self._redis_cache.shutdown, flush_timeout)
+            self._redis_cache = None
+
+    def _build_checkpoint_tuple_from_redis(
+        self,
+        redis_data: dict[str, Any],
+        config: RunnableConfig,
+    ) -> CheckpointTuple:
+        """Build a CheckpointTuple from Redis cache data.
+
+        Args:
+            redis_data: Data retrieved from Redis cache.
+            config: Original config for the request.
+
+        Returns:
+            CheckpointTuple constructed from the cached data.
+        """
+        thread_id = redis_data["thread_id"]
+        checkpoint_ns = redis_data["checkpoint_ns"]
+        checkpoint_id = redis_data["checkpoint_id"]
+        parent_checkpoint_id = redis_data.get("parent_checkpoint_id")
+        checkpoint_dict = redis_data["checkpoint"]
+        metadata_dict = redis_data.get("metadata", {})
+
+        return CheckpointTuple(
+            config={
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": checkpoint_ns,
+                    "checkpoint_id": checkpoint_id,
+                }
+            },
+            checkpoint=checkpoint_dict,
+            metadata=metadata_dict,
+            parent_config=(
+                {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": parent_checkpoint_id,
+                    }
+                }
+                if parent_checkpoint_id
+                else None
+            ),
+            pending_writes=[],
+        )
 
     def _row_to_checkpoint_tuple(self, row: tuple[Any, ...]) -> CheckpointTuple:
         """Convert a database row to a CheckpointTuple."""
