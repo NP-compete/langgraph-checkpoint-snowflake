@@ -1,0 +1,133 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langgraph-checkpoint-snowflake"
+version = "0.1.0"
+description = "Snowflake checkpoint saver for LangGraph - enables durable, stateful AI agents with Snowflake persistence"
+authors = [{ name = "Soham Dutta" }]
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+keywords = ["langgraph", "checkpoint", "snowflake", "ai", "agents", "persistence"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+dependencies = [
+    "langgraph-checkpoint>=2.1.2,<5.0.0",
+    "snowflake-connector-python>=3.0.0",
+    "cryptography>=3.0.0",  # For key pair authentication
+]
+
+[project.optional-dependencies]
+nest-asyncio = [
+    "nest-asyncio>=1.5.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    "hypothesis>=6.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+    "nest-asyncio>=1.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sodutta/langgraph-checkpoint-snowflake"
+Documentation = "https://github.com/sodutta/langgraph-checkpoint-snowflake#readme"
+Repository = "https://github.com/sodutta/langgraph-checkpoint-snowflake"
+Issues = "https://github.com/sodutta/langgraph-checkpoint-snowflake/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langgraph_checkpoint_snowflake"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--strict-markers --strict-config -vv"
+markers = [
+    "integration: marks tests as integration tests (require Snowflake connection)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:hypothesis",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # Pyflakes
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "I",      # isort
+]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["langgraph_checkpoint_snowflake"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = [
+    "snowflake.*",
+    "langgraph.*",
+    "langchain_core.*",
+    "nest_asyncio",
+    "msgpack",
+    "lz4.*",
+    "pydantic.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "examples.*"
+ignore_errors = true
+
+[tool.coverage.run]
+source = ["src/langgraph_checkpoint_snowflake"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
