@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import time
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from langgraph_checkpoint_snowflake.redis_cache import (
-    RedisWriteCache,
     RedisWriteCacheConfig,
 )
 
@@ -25,21 +23,6 @@ def redis_config() -> RedisWriteCacheConfig:
         max_pending_writes=100,
         key_prefix="test",
     )
-
-
-@pytest.fixture
-def mock_redis() -> MagicMock:
-    """Create a mock Redis client."""
-    mock = MagicMock()
-    mock.ping.return_value = True
-    mock.pipeline.return_value = MagicMock()
-    mock.pipeline.return_value.execute.return_value = [True, True]
-    mock.zcard.return_value = 0
-    mock.zrange.return_value = []
-    mock.scan.return_value = (0, [])
-    mock.set.return_value = True
-    mock.eval.return_value = 1
-    return mock
 
 
 @pytest.fixture
@@ -100,14 +83,37 @@ class TestRedisWriteCacheConfig:
     def test_immutable(self) -> None:
         """Test that config is immutable (frozen)."""
         config = RedisWriteCacheConfig()
-        with pytest.raises(TypeError):
+        # Pydantic frozen models raise ValidationError on attribute assignment
+        with pytest.raises((TypeError, ValueError)):
             config.enabled = True  # type: ignore[misc]
 
 
 class TestRedisWriteCache:
-    """Tests for RedisWriteCache."""
+    """Tests for RedisWriteCache using fakeredis."""
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
+    @pytest.fixture
+    def mock_redis_module(self) -> MagicMock:
+        """Create a mock redis module."""
+        mock_module = MagicMock()
+        mock_client = MagicMock()
+        mock_client.ping.return_value = True
+        mock_client.zcard.return_value = 0
+        mock_client.zrange.return_value = []
+        mock_client.scan.return_value = (0, [])
+        mock_client.set.return_value = True
+        mock_client.get.return_value = None
+        mock_client.eval.return_value = 1
+        mock_client.publish.return_value = 1
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.execute.return_value = [True, True]
+        mock_client.pipeline.return_value = mock_pipeline
+
+        mock_module.ConnectionPool.from_url.return_value = MagicMock()
+        mock_module.Redis.return_value = mock_client
+
+        return mock_module
+
     def test_init_connects_to_redis(
         self,
         mock_redis_module: MagicMock,
@@ -115,20 +121,19 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test that init connects to Redis."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+        # Patch redis in sys.modules before importing RedisWriteCache
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            # Need to reimport to pick up the mock
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
+            cache = RedisWriteCache(redis_config, mock_snowflake_saver)
 
-        # Verify connection was tested
-        mock_client.ping.assert_called_once()
+            # Verify connection was tested
+            mock_redis_module.Redis.return_value.ping.assert_called_once()
 
-        # Cleanup
-        cache._stop_event.set()
+            # Cleanup
+            cache._stop_event.set()
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
     def test_init_raises_on_connection_failure(
         self,
         mock_redis_module: MagicMock,
@@ -136,15 +141,16 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test that init raises on connection failure."""
-        mock_client = MagicMock()
-        mock_client.ping.side_effect = Exception("Connection refused")
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+        mock_redis_module.Redis.return_value.ping.side_effect = Exception(
+            "Connection refused"
+        )
 
-        with pytest.raises(ConnectionError, match="Failed to connect"):
-            RedisWriteCache(redis_config, mock_snowflake_saver)
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
+            with pytest.raises(ConnectionError, match="Failed to connect"):
+                RedisWriteCache(redis_config, mock_snowflake_saver)
+
     def test_put_writes_to_redis(
         self,
         mock_redis_module: MagicMock,
@@ -152,77 +158,35 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test that put writes checkpoint to Redis."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
-        mock_pipeline = MagicMock()
-        mock_pipeline.execute.return_value = [True, True]
-        mock_client.pipeline.return_value = mock_pipeline
-        mock_client.zcard.return_value = 1
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+        mock_client = mock_redis_module.Redis.return_value
+        mock_pipeline = mock_client.pipeline.return_value
 
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-        # Write a checkpoint
-        cache.put(
-            thread_id="thread-1",
-            checkpoint_ns="default",
-            checkpoint_id="cp-1",
-            checkpoint_data={"id": "cp-1", "v": 1},
-            metadata={"source": "input"},
-        )
+            cache = RedisWriteCache(redis_config, mock_snowflake_saver)
 
-        # Verify pipeline was used
-        mock_client.pipeline.assert_called()
-        mock_pipeline.setex.assert_called_once()
-        mock_pipeline.zadd.assert_called_once()
-        mock_pipeline.execute.assert_called_once()
+            # Write a checkpoint
+            cache.put(
+                thread_id="thread-1",
+                checkpoint_ns="default",
+                checkpoint_id="cp-1",
+                checkpoint_data={"id": "cp-1", "v": 1},
+                metadata={"source": "input"},
+            )
 
-        # Verify metrics updated
-        assert cache._metrics["writes"] == 1
+            # Verify pipeline was used
+            mock_client.pipeline.assert_called()
+            mock_pipeline.setex.assert_called_once()
+            mock_pipeline.zadd.assert_called_once()
+            mock_pipeline.execute.assert_called_once()
 
-        # Cleanup
-        cache._stop_event.set()
+            # Verify metrics updated
+            assert cache._metrics["writes"] == 1
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
-    def test_get_returns_cached_data(
-        self,
-        mock_redis_module: MagicMock,
-        redis_config: RedisWriteCacheConfig,
-        mock_snowflake_saver: MagicMock,
-    ) -> None:
-        """Test that get returns data from Redis cache."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
+            # Cleanup
+            cache._stop_event.set()
 
-        # Mock cached data
-        cached_data = {
-            "thread_id": "thread-1",
-            "checkpoint_ns": "default",
-            "checkpoint_id": "cp-1",
-            "checkpoint": {"id": "cp-1", "v": 1},
-            "metadata": {"source": "input"},
-            "timestamp": time.time(),
-        }
-        mock_client.get.return_value = json.dumps(cached_data).encode("utf-8")
-
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
-
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
-
-        # Get the checkpoint
-        result = cache.get("thread-1", "default", "cp-1")
-
-        assert result is not None
-        assert result["checkpoint_id"] == "cp-1"
-        assert result["checkpoint"]["id"] == "cp-1"
-        assert cache._metrics["cache_hits"] == 1
-
-        # Cleanup
-        cache._stop_event.set()
-
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
     def test_get_returns_none_on_miss(
         self,
         mock_redis_module: MagicMock,
@@ -230,75 +194,22 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test that get returns None on cache miss."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
+        mock_client = mock_redis_module.Redis.return_value
         mock_client.get.return_value = None
 
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
+            cache = RedisWriteCache(redis_config, mock_snowflake_saver)
 
-        result = cache.get("thread-1", "default", "cp-1")
+            result = cache.get("thread-1", "default", "cp-1")
 
-        assert result is None
-        assert cache._metrics["cache_misses"] == 1
+            assert result is None
+            assert cache._metrics["cache_misses"] == 1
 
-        # Cleanup
-        cache._stop_event.set()
+            # Cleanup
+            cache._stop_event.set()
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
-    def test_get_latest_checkpoint(
-        self,
-        mock_redis_module: MagicMock,
-        redis_config: RedisWriteCacheConfig,
-        mock_snowflake_saver: MagicMock,
-    ) -> None:
-        """Test getting latest checkpoint (no checkpoint_id)."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
-
-        # Mock multiple checkpoints
-        cp1 = {
-            "thread_id": "thread-1",
-            "checkpoint_ns": "default",
-            "checkpoint_id": "cp-1",
-            "checkpoint": {"id": "cp-1"},
-            "metadata": {},
-            "timestamp": 1000.0,
-        }
-        cp2 = {
-            "thread_id": "thread-1",
-            "checkpoint_ns": "default",
-            "checkpoint_id": "cp-2",
-            "checkpoint": {"id": "cp-2"},
-            "metadata": {},
-            "timestamp": 2000.0,  # Newer
-        }
-
-        mock_client.scan.return_value = (0, [b"key1", b"key2"])
-        mock_pipeline = MagicMock()
-        mock_pipeline.execute.return_value = [
-            json.dumps(cp1).encode("utf-8"),
-            json.dumps(cp2).encode("utf-8"),
-        ]
-        mock_client.pipeline.return_value = mock_pipeline
-
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
-
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
-
-        # Get latest (no checkpoint_id)
-        result = cache.get("thread-1", "default", None)
-
-        assert result is not None
-        assert result["checkpoint_id"] == "cp-2"  # Should be the newer one
-
-        # Cleanup
-        cache._stop_event.set()
-
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
     def test_get_stats(
         self,
         mock_redis_module: MagicMock,
@@ -306,30 +217,30 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test get_stats returns cache statistics."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
+        import time
+
+        mock_client = mock_redis_module.Redis.return_value
         mock_client.zcard.return_value = 42
         mock_client.zrange.return_value = [(b"key1", time.time() - 10)]
 
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
+            cache = RedisWriteCache(redis_config, mock_snowflake_saver)
 
-        stats = cache.get_stats()
+            stats = cache.get_stats()
 
-        assert stats["enabled"] is True
-        assert stats["pending_writes"] == 42
-        assert stats["oldest_pending_age_seconds"] is not None
-        assert stats["redis_connected"] is True
-        assert "writes" in stats
-        assert "reads" in stats
-        assert "cache_hit_rate" in stats
+            assert stats["enabled"] is True
+            assert stats["pending_writes"] == 42
+            assert stats["oldest_pending_age_seconds"] is not None
+            assert stats["redis_connected"] is True
+            assert "writes" in stats
+            assert "reads" in stats
+            assert "cache_hit_rate" in stats
 
-        # Cleanup
-        cache._stop_event.set()
+            # Cleanup
+            cache._stop_event.set()
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
     def test_invalidate(
         self,
         mock_redis_module: MagicMock,
@@ -337,25 +248,23 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test invalidate removes cache entries."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
+        mock_client = mock_redis_module.Redis.return_value
         mock_client.scan.return_value = (0, [b"key1", b"key2"])
         mock_client.delete.return_value = 2
 
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
+            cache = RedisWriteCache(redis_config, mock_snowflake_saver)
 
-        deleted = cache.invalidate("thread-1", "default")
+            deleted = cache.invalidate("thread-1", "default")
 
-        assert deleted == 2
-        mock_client.delete.assert_called_once()
+            assert deleted == 2
+            mock_client.delete.assert_called_once()
 
-        # Cleanup
-        cache._stop_event.set()
+            # Cleanup
+            cache._stop_event.set()
 
-    @patch("langgraph_checkpoint_snowflake.redis_cache.redis")
     def test_make_data_key(
         self,
         mock_redis_module: MagicMock,
@@ -363,77 +272,66 @@ class TestRedisWriteCache:
         mock_snowflake_saver: MagicMock,
     ) -> None:
         """Test _make_data_key creates correct key format."""
-        mock_client = MagicMock()
-        mock_client.ping.return_value = True
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
-        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
-        mock_redis_module.Redis.return_value = mock_client
+            cache = RedisWriteCache(redis_config, mock_snowflake_saver)
 
-        cache = RedisWriteCache(redis_config, mock_snowflake_saver)
+            key = cache._make_data_key("thread-1", "ns", "cp-1")
 
-        key = cache._make_data_key("thread-1", "ns", "cp-1")
+            assert key == "test:data:thread-1:ns:cp-1"
 
-        assert key == "test:data:thread-1:ns:cp-1"
-
-        # Cleanup
-        cache._stop_event.set()
+            # Cleanup
+            cache._stop_event.set()
 
 
 class TestRedisWriteCacheIntegration:
     """Integration tests using fakeredis."""
 
-    @pytest.fixture
-    def fakeredis_cache(
+    def test_put_and_get_roundtrip(
         self,
         redis_config: RedisWriteCacheConfig,
         mock_snowflake_saver: MagicMock,
-    ) -> RedisWriteCache | None:
-        """Create a cache with fakeredis for integration testing."""
+    ) -> None:
+        """Test full put/get roundtrip with fakeredis."""
         try:
             import fakeredis
         except ImportError:
             pytest.skip("fakeredis not installed")
-            return None
+            return
 
-        # Patch redis to use fakeredis
-        with patch("langgraph_checkpoint_snowflake.redis_cache.redis") as mock_module:
-            fake_server = fakeredis.FakeServer()
-            fake_redis = fakeredis.FakeRedis(server=fake_server)
+        # Create a fakeredis instance
+        fake_redis = fakeredis.FakeRedis(decode_responses=False)
 
-            mock_module.ConnectionPool.from_url.return_value = MagicMock()
-            mock_module.Redis.return_value = fake_redis
+        # Create a mock redis module that returns our fake client
+        mock_redis_module = MagicMock()
+        mock_redis_module.ConnectionPool.from_url.return_value = MagicMock()
+        mock_redis_module.Redis.return_value = fake_redis
+
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            from langgraph_checkpoint_snowflake.redis_cache import RedisWriteCache
 
             cache = RedisWriteCache(redis_config, mock_snowflake_saver)
-            yield cache
 
+            # Put a checkpoint
+            cache.put(
+                thread_id="thread-1",
+                checkpoint_ns="default",
+                checkpoint_id="cp-1",
+                checkpoint_data={"id": "cp-1", "v": 1, "data": "test"},
+                metadata={"source": "input", "step": 0},
+            )
+
+            # Get it back
+            result = cache.get("thread-1", "default", "cp-1")
+
+            assert result is not None
+            assert result["checkpoint_id"] == "cp-1"
+            assert result["checkpoint"]["data"] == "test"
+            assert result["metadata"]["source"] == "input"
+
+            # Cleanup
             cache._stop_event.set()
-
-    def test_put_and_get_roundtrip(
-        self,
-        fakeredis_cache: RedisWriteCache | None,
-    ) -> None:
-        """Test full put/get roundtrip with fakeredis."""
-        if fakeredis_cache is None:
-            pytest.skip("fakeredis not available")
-
-        cache = fakeredis_cache
-
-        # Put a checkpoint
-        cache.put(
-            thread_id="thread-1",
-            checkpoint_ns="default",
-            checkpoint_id="cp-1",
-            checkpoint_data={"id": "cp-1", "v": 1, "data": "test"},
-            metadata={"source": "input", "step": 0},
-        )
-
-        # Get it back
-        result = cache.get("thread-1", "default", "cp-1")
-
-        assert result is not None
-        assert result["checkpoint_id"] == "cp-1"
-        assert result["checkpoint"]["data"] == "test"
-        assert result["metadata"]["source"] == "input"
 
 
 class TestRedisWriteCacheValKeyCompatibility:

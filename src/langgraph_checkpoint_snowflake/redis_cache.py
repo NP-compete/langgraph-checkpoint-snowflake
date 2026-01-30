@@ -222,7 +222,7 @@ class RedisWriteCache:
         )
 
         # Create Redis client
-        self._redis: Redis[bytes] = redis.Redis(connection_pool=self._pool)
+        self._redis: Redis = redis.Redis(connection_pool=self._pool)
 
         # Verify connection
         try:
