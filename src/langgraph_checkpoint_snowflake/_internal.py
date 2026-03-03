@@ -186,9 +186,11 @@ def get_connection_params_from_env() -> dict[str, Any]:
 
     missing_base = [var for var in base_required if not os.environ.get(var)]
     if missing_base:
-        raise ValueError(
-            f"Missing required environment variables: {', '.join(missing_base)}"
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConfigurationError,
         )
+
+        raise SnowflakeConfigurationError.with_guidance(missing_base)
 
     # Check for authentication method
     has_password = bool(os.environ.get("SNOWFLAKE_PASSWORD"))
@@ -196,9 +198,12 @@ def get_connection_params_from_env() -> dict[str, Any]:
     has_key_data = bool(os.environ.get("SNOWFLAKE_PRIVATE_KEY"))
 
     if not has_password and not has_key_path and not has_key_data:
-        raise ValueError(
-            "Missing authentication: Set SNOWFLAKE_PASSWORD for password auth, "
-            "or SNOWFLAKE_PRIVATE_KEY_PATH / SNOWFLAKE_PRIVATE_KEY for key pair auth"
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConfigurationError,
+        )
+
+        raise SnowflakeConfigurationError.with_guidance(
+            ["SNOWFLAKE_PASSWORD or SNOWFLAKE_PRIVATE_KEY_PATH"]
         )
 
     params: dict[str, Any] = {

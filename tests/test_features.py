@@ -386,3 +386,138 @@ class TestAsyncFeatures:
 
         count = await saver.aget_checkpoint_count()
         assert count == 100
+
+
+class TestErrorGuidance:
+    """Tests for actionable error messages with troubleshooting guidance."""
+
+    def test_connection_error_with_guidance(self) -> None:
+        """Test that SnowflakeConnectionError.with_guidance includes troubleshooting."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConnectionError,
+        )
+
+        original = ConnectionError("Could not connect to Snowflake backend")
+        err = SnowflakeConnectionError.with_guidance(original)
+
+        assert isinstance(err, SnowflakeConnectionError)
+        assert err.original_error is original
+        assert "Troubleshooting" in err.message
+        assert "SNOWFLAKE_ACCOUNT" in err.message
+        assert "docs.snowflake.com" in err.message
+
+    def test_authentication_error_with_guidance(self) -> None:
+        """Test that SnowflakeAuthenticationError.with_guidance includes troubleshooting."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeAuthenticationError,
+        )
+
+        original = PermissionError("Invalid credentials")
+        err = SnowflakeAuthenticationError.with_guidance(original)
+
+        assert isinstance(err, SnowflakeAuthenticationError)
+        assert err.original_error is original
+        assert "Troubleshooting" in err.message
+        assert "SNOWFLAKE_USER" in err.message
+        assert "key pair auth" in err.message.lower()
+        assert "RSA_PUBLIC_KEY" in err.message
+
+    def test_warehouse_error_with_guidance(self) -> None:
+        """Test that SnowflakeWarehouseError.with_guidance includes troubleshooting."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeWarehouseError,
+        )
+
+        original = RuntimeError("Warehouse suspended")
+        err = SnowflakeWarehouseError.with_guidance(
+            original, warehouse="COMPUTE_WH", retry_count=3
+        )
+
+        assert isinstance(err, SnowflakeWarehouseError)
+        assert err.original_error is original
+        assert err.retry_count == 3
+        assert "COMPUTE_WH" in err.message
+        assert "Troubleshooting" in err.message
+        assert "ALTER WAREHOUSE" in err.message
+
+    def test_warehouse_error_with_guidance_default_name(self) -> None:
+        """Test warehouse error guidance with no warehouse name."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeWarehouseError,
+        )
+
+        original = RuntimeError("Warehouse error")
+        err = SnowflakeWarehouseError.with_guidance(original)
+
+        assert "<warehouse>" in err.message
+
+    def test_configuration_error_with_guidance_list(self) -> None:
+        """Test that SnowflakeConfigurationError.with_guidance formats missing params list."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConfigurationError,
+        )
+
+        err = SnowflakeConfigurationError.with_guidance(
+            ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER"]
+        )
+
+        assert isinstance(err, SnowflakeConfigurationError)
+        assert "SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER" in err.message
+        assert "Required environment variables" in err.message
+        assert "SNOWFLAKE_PASSWORD" in err.message
+        assert "SNOWFLAKE_PRIVATE_KEY_PATH" in err.message
+
+    def test_configuration_error_with_guidance_string(self) -> None:
+        """Test configuration error guidance with a string param."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConfigurationError,
+        )
+
+        err = SnowflakeConfigurationError.with_guidance("missing auth method")
+
+        assert "missing auth method" in err.message
+        assert "Required environment variables" in err.message
+
+    def test_configuration_error_with_guidance_none(self) -> None:
+        """Test configuration error guidance with no params."""
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConfigurationError,
+        )
+
+        err = SnowflakeConfigurationError.with_guidance()
+
+        assert "unknown" in err.message
+
+    def test_configuration_error_raised_for_missing_env(self) -> None:
+        """Test that get_connection_params_from_env raises SnowflakeConfigurationError."""
+        import os
+
+        from langgraph_checkpoint_snowflake._internal import (
+            get_connection_params_from_env,
+        )
+        from langgraph_checkpoint_snowflake.exceptions import (
+            SnowflakeConfigurationError,
+        )
+
+        # Clear all Snowflake env vars
+        env_vars = [
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "SNOWFLAKE_WAREHOUSE",
+            "SNOWFLAKE_DATABASE",
+            "SNOWFLAKE_SCHEMA",
+            "SNOWFLAKE_PASSWORD",
+            "SNOWFLAKE_PRIVATE_KEY_PATH",
+            "SNOWFLAKE_PRIVATE_KEY",
+        ]
+        saved = {k: os.environ.pop(k, None) for k in env_vars}
+
+        try:
+            with pytest.raises(SnowflakeConfigurationError) as exc_info:
+                get_connection_params_from_env()
+            assert "Required environment variables" in str(exc_info.value)
+        finally:
+            # Restore env vars
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
