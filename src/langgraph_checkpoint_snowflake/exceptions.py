@@ -55,7 +55,32 @@ class SnowflakeConnectionError(SnowflakeCheckpointError):
         ...     print(f"Connection failed: {e}")
     """
 
-    pass
+    @classmethod
+    def with_guidance(
+        cls, original_error: Exception
+    ) -> SnowflakeConnectionError:
+        """Create a connection error with actionable troubleshooting steps.
+
+        Args:
+            original_error: The original exception that caused the failure.
+
+        Returns:
+            A SnowflakeConnectionError with helpful guidance.
+        """
+        message = (
+            f"Failed to connect to Snowflake: {original_error}\n\n"
+            "Troubleshooting:\n"
+            "1. Verify SNOWFLAKE_ACCOUNT format "
+            "(e.g., 'xy12345' or 'xy12345.us-east-1')\n"
+            "2. Check network connectivity "
+            "(firewall, proxy, VPN)\n"
+            "3. Ensure IP is allowlisted in Snowflake "
+            "network policies\n"
+            "4. Verify warehouse is not suspended\n\n"
+            "Docs: https://docs.snowflake.com/en/user-guide/"
+            "troubleshooting"
+        )
+        return cls(message, original_error)
 
 
 class SnowflakeAuthenticationError(SnowflakeConnectionError):
@@ -75,7 +100,35 @@ class SnowflakeAuthenticationError(SnowflakeConnectionError):
         ...     print(f"Auth failed: {e}")
     """
 
-    pass
+    @classmethod
+    def with_guidance(
+        cls, original_error: Exception
+    ) -> SnowflakeAuthenticationError:
+        """Create an authentication error with actionable troubleshooting steps.
+
+        Args:
+            original_error: The original exception that caused the failure.
+
+        Returns:
+            A SnowflakeAuthenticationError with helpful guidance.
+        """
+        message = (
+            f"Authentication failed: {original_error}\n\n"
+            "Troubleshooting:\n"
+            "1. For password auth: Verify SNOWFLAKE_USER "
+            "and SNOWFLAKE_PASSWORD\n"
+            "2. For key pair auth:\n"
+            "   - Verify private key file exists and is readable\n"
+            "   - Ensure public key is registered with "
+            "Snowflake user\n"
+            "   - Check passphrase if key is encrypted\n"
+            "3. Verify user has not been locked out\n\n"
+            "To register public key:\n"
+            "  ALTER USER <user> SET RSA_PUBLIC_KEY='...'\n\n"
+            "Docs: https://docs.snowflake.com/en/user-guide/"
+            "key-pair-auth"
+        )
+        return cls(message, original_error)
 
 
 class SnowflakeQueryError(SnowflakeCheckpointError):
@@ -158,7 +211,41 @@ class SnowflakeWarehouseError(SnowflakeTransientError):
         ...     print("Consider using a larger warehouse or auto-resume")
     """
 
-    pass
+    @classmethod
+    def with_guidance(
+        cls,
+        original_error: Exception,
+        warehouse: str | None = None,
+        retry_count: int = 0,
+    ) -> SnowflakeWarehouseError:
+        """Create a warehouse error with actionable troubleshooting steps.
+
+        Args:
+            original_error: The original exception that caused the failure.
+            warehouse: The warehouse name, if known.
+            retry_count: Number of retries attempted.
+
+        Returns:
+            A SnowflakeWarehouseError with helpful guidance.
+        """
+        wh_name = warehouse or "<warehouse>"
+        message = (
+            f"Warehouse '{wh_name}' is unavailable: "
+            f"{original_error}\n\n"
+            "Troubleshooting:\n"
+            "1. Warehouse may be suspended — "
+            "it will auto-resume on query\n"
+            f"2. Verify warehouse exists: "
+            f"SHOW WAREHOUSES LIKE '{wh_name}'\n"
+            "3. Check you have USAGE privilege on the warehouse\n"
+            "4. Warehouse may be at capacity — "
+            "try a larger size\n\n"
+            f"To manually resume:\n"
+            f"  ALTER WAREHOUSE {wh_name} RESUME\n\n"
+            "Docs: https://docs.snowflake.com/en/user-guide/"
+            "warehouses"
+        )
+        return cls(message, original_error, retry_count)
 
 
 class SnowflakeSchemaError(SnowflakeQueryError):
@@ -217,7 +304,46 @@ class SnowflakeConfigurationError(SnowflakeCheckpointError):
         ...     print("Check your environment variables")
     """
 
-    pass
+    @classmethod
+    def with_guidance(
+        cls, missing_params: list[str] | str | None = None
+    ) -> SnowflakeConfigurationError:
+        """Create a configuration error with actionable troubleshooting steps.
+
+        Args:
+            missing_params: List of missing parameter names, or a
+                descriptive string.
+
+        Returns:
+            A SnowflakeConfigurationError with helpful guidance.
+        """
+        if isinstance(missing_params, list):
+            missing_str = ", ".join(missing_params)
+        else:
+            missing_str = missing_params or "unknown"
+
+        message = (
+            f"Missing required configuration: {missing_str}\n\n"
+            "Required environment variables:\n"
+            "  SNOWFLAKE_ACCOUNT    - Your Snowflake account "
+            "identifier\n"
+            "  SNOWFLAKE_USER       - Username for authentication\n"
+            "  SNOWFLAKE_WAREHOUSE  - Warehouse to use for queries\n"
+            "  SNOWFLAKE_DATABASE   - Database name\n"
+            "  SNOWFLAKE_SCHEMA     - Schema name\n\n"
+            "Authentication (one of):\n"
+            "  SNOWFLAKE_PASSWORD        - "
+            "For password authentication\n"
+            "  SNOWFLAKE_PRIVATE_KEY_PATH - "
+            "For key pair authentication\n\n"
+            "Example:\n"
+            '  export SNOWFLAKE_ACCOUNT="xy12345.us-east-1"\n'
+            '  export SNOWFLAKE_USER="my_user"\n'
+            '  export SNOWFLAKE_PASSWORD="my_password"\n\n'
+            "Docs: https://github.com/NP-compete/"
+            "langgraph-checkpoint-snowflake#prerequisites"
+        )
+        return cls(message)
 
 
 def wrap_snowflake_error(
@@ -249,7 +375,7 @@ def wrap_snowflake_error(
 
         # Authentication errors
         if isinstance(error, sf_errors.ForbiddenError) or "authentication" in error_str:
-            return SnowflakeAuthenticationError(error_msg, error)
+            return SnowflakeAuthenticationError.with_guidance(error)
 
         # Connection errors
         if isinstance(
@@ -257,11 +383,13 @@ def wrap_snowflake_error(
         ) and any(
             x in error_str for x in ["connection", "network", "timeout", "refused"]
         ):
-            return SnowflakeConnectionError(error_msg, error)
+            return SnowflakeConnectionError.with_guidance(error)
 
         # Warehouse errors
         if "warehouse" in error_str or "suspended" in error_str:
-            return SnowflakeWarehouseError(error_msg, error, retry_count)
+            return SnowflakeWarehouseError.with_guidance(
+                error, retry_count=retry_count
+            )
 
         # Transient errors (service unavailable, etc.)
         if isinstance(error, sf_errors.ServiceUnavailableError) or any(
