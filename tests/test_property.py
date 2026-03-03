@@ -55,8 +55,10 @@ if HYPOTHESIS_AVAILABLE:
         | st.integers(min_value=-(2**31), max_value=2**31 - 1)
         | st.floats(allow_nan=False, allow_infinity=False)
         | st.text(max_size=100),
-        lambda children: st.lists(children, max_size=10)
-        | st.dictionaries(st.text(min_size=1, max_size=20), children, max_size=10),
+        lambda children: (
+            st.lists(children, max_size=10)
+            | st.dictionaries(st.text(min_size=1, max_size=20), children, max_size=10)
+        ),
         max_leaves=50,
     )
 
