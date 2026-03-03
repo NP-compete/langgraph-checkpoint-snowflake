@@ -1,0 +1,60 @@
+name: Question
+description: Ask a question about usage or behavior
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question? We're happy to help!
+
+        **Before asking**, please check:
+        - [README](https://github.com/NP-compete/langgraph-checkpoint-snowflake#readme)
+        - [Existing issues](https://github.com/NP-compete/langgraph-checkpoint-snowflake/issues?q=is%3Aissue)
+        - [Discussions](https://github.com/NP-compete/langgraph-checkpoint-snowflake/discussions)
+
+  - type: dropdown
+    id: question-area
+    attributes:
+      label: Question area
+      description: What area does your question relate to?
+      options:
+        - Getting started / Installation
+        - Configuration / Setup
+        - Authentication (password, key pair)
+        - Performance / Caching
+        - Redis/Valkey cache
+        - Async usage
+        - Integration with LangGraph
+        - Deployment / Production
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What would you like to know?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What have you tried?
+      description: Share what you've already tried or researched.
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Relevant code
+      description: If applicable, share relevant code snippets.
+      render: python
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: What version are you using?
+      placeholder: "0.1.0"

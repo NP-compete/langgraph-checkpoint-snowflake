@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/NP-compete/langgraph-checkpoint-snowflake/discussions
+    about: Ask questions and discuss with the community
+  - name: LangGraph Documentation
+    url: https://langchain-ai.github.io/langgraph/
+    about: Official LangGraph documentation
+  - name: Snowflake Documentation
+    url: https://docs.snowflake.com/
+    about: Official Snowflake documentation
