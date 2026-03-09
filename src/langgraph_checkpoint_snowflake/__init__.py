@@ -220,11 +220,11 @@ class SnowflakeSaver(BaseSnowflakeSaver):
             schema: Schema to use.
             role: Optional role to use.
             authenticator: Optional authenticator method.
-            serde: Optional serializer for checkpoint data.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
             **kwargs: Additional connection parameters.
 
         Yields:
-            A configured SnowflakeSaver instance.
+            Iterator[SnowflakeSaver]: A configured SnowflakeSaver instance.
 
         Example:
             >>> with SnowflakeSaver.from_conn_string(
@@ -281,7 +281,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
             - SNOWFLAKE_PRIVATE_KEY_PASSPHRASE (for encrypted private keys)
 
         Yields:
-            A configured SnowflakeSaver instance.
+            Iterator[SnowflakeSaver]: A configured SnowflakeSaver instance.
         """
         params = get_connection_params_from_env()
         conn = create_connection(**params)
@@ -322,11 +322,11 @@ class SnowflakeSaver(BaseSnowflakeSaver):
             private_key: PEM-encoded private key as string or bytes.
             private_key_passphrase: Passphrase for encrypted private keys.
             role: Optional role to use.
-            serde: Optional serializer for checkpoint data.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
             **kwargs: Additional connection parameters.
 
         Yields:
-            A configured SnowflakeSaver instance.
+            Iterator[SnowflakeSaver]: A configured SnowflakeSaver instance.
 
         Example:
             >>> with SnowflakeSaver.from_key_pair(
@@ -415,12 +415,12 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         Checks caches in order: Redis write cache -> LRU read cache -> Snowflake.
 
         Args:
-            config: Configuration specifying which checkpoint to retrieve.
+            config (RunnableConfig): Configuration specifying which checkpoint to retrieve.
                 Must contain `thread_id` in configurable. Optionally contains
                 `checkpoint_ns` and `checkpoint_id`.
 
         Returns:
-            The checkpoint tuple if found, None otherwise.
+            CheckpointTuple | None: The checkpoint tuple if found, None otherwise.
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_id = get_checkpoint_id(config)
@@ -501,7 +501,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
             limit: Maximum number of checkpoints to return.
 
         Yields:
-            Matching checkpoint tuples, ordered by checkpoint_id descending.
+            Iterator[CheckpointTuple]: Matching checkpoint tuples, ordered by checkpoint_id descending.
         """
         where, params = self._search_where(config, filter, before)
         query = self.SELECT_SQL + where + " ORDER BY c.checkpoint_id DESC"
@@ -536,7 +536,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
             new_versions: New channel versions as of this write.
 
         Returns:
-            Updated configuration with the new checkpoint_id.
+            RunnableConfig: Updated configuration with the new checkpoint_id.
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -695,7 +695,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         Also invalidates any cached entries for this thread.
 
         Args:
-            thread_id: The thread ID to delete.
+            thread_id (str): The thread ID to delete.
         """
         # Invalidate cache for this thread
         self._cache.invalidate(thread_id)
@@ -728,10 +728,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         checkpoints that are older than the specified duration.
 
         Args:
-            max_age: Maximum age of checkpoints to keep.
+            max_age (timedelta): Maximum age of checkpoints to keep.
 
         Returns:
-            Number of checkpoints deleted.
+            int: Number of checkpoints deleted.
 
         Example:
             >>> from datetime import timedelta
@@ -778,7 +778,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get the total number of checkpoints.
 
         Returns:
-            Total number of checkpoints in the database.
+            int: Total number of checkpoints in the database.
         """
         with timed_operation(self.metrics, "get_checkpoint_count"):
             with self.lock, get_cursor(self.conn) as cur:
@@ -797,10 +797,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get checkpoint counts grouped by thread.
 
         Args:
-            max_results: Maximum number of threads to return.
+            max_results (int): Maximum number of threads to return.
 
         Returns:
-            List of (thread_id, count) tuples, ordered by count descending.
+            list[tuple[str, int]]: List of (thread_id, count) tuples, ordered by count descending.
         """
         with timed_operation(self.metrics, "get_checkpoint_counts_by_thread"):
             with self.lock, get_cursor(self.conn) as cur:
@@ -819,10 +819,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         as it batches the delete operations.
 
         Args:
-            thread_ids: List of thread IDs to delete.
+            thread_ids (list[str]): List of thread IDs to delete.
 
         Returns:
-            Number of threads deleted.
+            int: Number of threads deleted.
         """
         if not thread_ids:
             return 0
@@ -862,7 +862,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get current metrics statistics.
 
         Returns:
-            Dictionary of metrics if enabled, None otherwise.
+            dict[str, Any] | None: Dictionary of metrics if enabled, None otherwise.
         """
         if self.metrics:
             return self.metrics.get_stats()
@@ -872,7 +872,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get LRU cache statistics.
 
         Returns:
-            Dictionary with cache hit/miss counts and hit rate.
+            dict[str, Any]: Dictionary with cache hit/miss counts and hit rate.
 
         Example:
             >>> stats = checkpointer.get_cache_stats()
