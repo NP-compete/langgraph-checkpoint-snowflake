@@ -432,7 +432,7 @@ class BaseSnowflakeSaver(BaseCheckpointSaver[str]):
         so we can generate a cutoff based on timestamp.
 
         Args:
-            max_age: Maximum age of checkpoints to keep.
+            max_age (timedelta): Maximum age of checkpoints to keep.
 
         Returns:
             A checkpoint ID string representing the cutoff point.

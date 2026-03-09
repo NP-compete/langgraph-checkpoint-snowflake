@@ -690,7 +690,7 @@ class RedisWriteCache:
             timeout: Max time to wait for sync completion (seconds).
 
         Returns:
-            Total number of checkpoints synced.
+            int: Total number of checkpoints synced.
 
         Raises:
             TimeoutError: If flush doesn't complete within timeout.
