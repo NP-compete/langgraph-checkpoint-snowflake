@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
     "langgraph-checkpoint>=2.1.2,<5.0.0",
     "snowflake-connector-python>=3.0.0",
-    "cryptography>=3.0.0",  # For key pair authentication
+    "cryptography>=46.0.7",  # For key pair authentication
 ]
 
 [project.optional-dependencies]
