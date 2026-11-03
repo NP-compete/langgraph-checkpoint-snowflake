@@ -75,13 +75,13 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         - Optional Redis/Valkey write-back cache for 100x faster writes
 
     Args:
-        conn: A Snowflake connection object.
-        serde: Optional serializer for checkpoint data.
-        retry_config: Optional retry configuration.
-        metrics: Optional metrics collector.
-        allow_sync_from_async: If True, enables sync method calls from within
+        conn (Conn): A Snowflake connection object.
+        serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+        retry_config (RetryConfig | None): Optional retry configuration.
+        metrics (Metrics | None): Optional metrics collector.
+        allow_sync_from_async (bool): If True, enables sync method calls from within
             an async context using nest_asyncio. Defaults to False.
-        redis_cache_config: Optional Redis write-back cache configuration.
+        redis_cache_config (RedisWriteCacheConfig | None): Optional Redis write-back cache configuration.
 
     Example:
         >>> async with AsyncSnowflakeSaver.from_conn_string(
@@ -129,6 +129,17 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         allow_sync_from_async: bool = False,
         redis_cache_config: RedisWriteCacheConfig | None = None,
     ) -> None:
+        """Initialize an AsyncSnowflakeSaver.
+
+        Args:
+            conn (Conn): A Snowflake connection object.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+            retry_config (RetryConfig | None): Optional retry configuration.
+            metrics (Metrics | None): Optional metrics collector.
+            allow_sync_from_async (bool): If True, enables sync method calls from within
+                an async context using nest_asyncio. Defaults to False.
+            redis_cache_config (RedisWriteCacheConfig | None): Optional Redis write-back cache configuration.
+        """
         super().__init__(serde=serde)
         self.conn = conn
         self.lock = asyncio.Lock()
@@ -192,19 +203,19 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Create an AsyncSnowflakeSaver from connection parameters.
 
         Args:
-            account: Snowflake account identifier.
-            user: Username for authentication.
-            password: Password for authentication.
-            warehouse: Warehouse to use.
-            database: Database to use.
-            schema: Schema to use.
-            role: Optional role to use.
-            authenticator: Optional authenticator method.
-            serde: Optional serializer for checkpoint data.
-            **kwargs: Additional connection parameters.
+            account (str): Snowflake account identifier.
+            user (str): Username for authentication.
+            password (str): Password for authentication.
+            warehouse (str): Warehouse to use.
+            database (str): Database to use.
+            schema (str): Schema to use.
+            role (str | None): Optional role to use.
+            authenticator (str | None): Optional authenticator method.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+            **kwargs (Any): Additional connection parameters.
 
         Yields:
-            A configured AsyncSnowflakeSaver instance.
+            AsyncSnowflakeSaver: A configured AsyncSnowflakeSaver instance.
         """
         conn = await asyncio.to_thread(
             create_connection,
@@ -250,7 +261,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
             - SNOWFLAKE_PRIVATE_KEY_PASSPHRASE (for encrypted private keys)
 
         Yields:
-            A configured AsyncSnowflakeSaver instance.
+            AsyncSnowflakeSaver: A configured AsyncSnowflakeSaver instance.
         """
         params = get_connection_params_from_env()
         conn = await asyncio.to_thread(create_connection, **params)
@@ -282,20 +293,20 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         environments as it avoids storing passwords.
 
         Args:
-            account: Snowflake account identifier.
-            user: Username for authentication.
-            warehouse: Warehouse to use.
-            database: Database to use.
-            schema: Schema to use.
-            private_key_path: Path to PEM-encoded private key file.
-            private_key: PEM-encoded private key as string or bytes.
-            private_key_passphrase: Passphrase for encrypted private keys.
-            role: Optional role to use.
-            serde: Optional serializer for checkpoint data.
-            **kwargs: Additional connection parameters.
+            account (str): Snowflake account identifier.
+            user (str): Username for authentication.
+            warehouse (str): Warehouse to use.
+            database (str): Database to use.
+            schema (str): Schema to use.
+            private_key_path (str | None): Path to PEM-encoded private key file.
+            private_key (str | bytes | None): PEM-encoded private key as string or bytes.
+            private_key_passphrase (str | None): Passphrase for encrypted private keys.
+            role (str | None): Optional role to use.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+            **kwargs (Any): Additional connection parameters.
 
         Yields:
-            A configured AsyncSnowflakeSaver instance.
+            AsyncSnowflakeSaver: A configured AsyncSnowflakeSaver instance.
 
         Example:
             >>> async with AsyncSnowflakeSaver.from_key_pair(
@@ -337,6 +348,9 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         already exist and runs any pending migrations.
 
         Note: This is an alias for asetup() for backwards compatibility.
+
+        Returns:
+            None: Nothing is returned.
         """
         await self.asetup()
 
@@ -347,6 +361,9 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         already exist and runs any pending migrations.
 
         This follows the LangGraph naming convention for async methods (asetup).
+
+        Returns:
+            None: Nothing is returned.
         """
         if self.is_setup:
             return
@@ -396,10 +413,22 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         Checks Redis write cache first if enabled, then queries Snowflake.
 
         Args:
-            config: Configuration specifying which checkpoint to retrieve.
+            config (RunnableConfig): Configuration specifying which checkpoint to retrieve.
+                Must contain `thread_id` in configurable. Optionally contains
+                `checkpoint_ns` and `checkpoint_id`.
 
         Returns:
-            The checkpoint tuple if found, None otherwise.
+            CheckpointTuple | None: The checkpoint tuple if found, None otherwise.
+
+        Raises:
+            SnowflakeConnectionError: If database connection fails.
+            SnowflakeQueryError: If query execution fails.
+
+        Example:
+            >>> config = {"configurable": {"thread_id": "my-thread"}}
+            >>> checkpoint = await saver.aget_tuple(config)
+            >>> if checkpoint:
+            ...     print(checkpoint.checkpoint["id"])
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_id = get_checkpoint_id(config)
@@ -463,13 +492,13 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """List checkpoints matching the given criteria asynchronously.
 
         Args:
-            config: Configuration for filtering by thread_id and checkpoint_ns.
-            filter: Additional metadata filters.
-            before: Only return checkpoints before this one.
-            limit: Maximum number of checkpoints to return.
+            config (RunnableConfig | None): Configuration for filtering by thread_id and checkpoint_ns.
+            filter (dict[str, Any] | None): Additional metadata filters.
+            before (RunnableConfig | None): Only return checkpoints before this one.
+            limit (int | None): Maximum number of checkpoints to return.
 
         Yields:
-            Matching checkpoint tuples, ordered by checkpoint_id descending.
+            CheckpointTuple: Matching checkpoint tuples, ordered by checkpoint_id descending.
         """
         # Fetch all results in a thread, then yield them
         results = await asyncio.to_thread(
@@ -515,13 +544,13 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         and are asynchronously synced to Snowflake in the background.
 
         Args:
-            config: Configuration for the checkpoint.
-            checkpoint: The checkpoint data to store.
-            metadata: Metadata associated with the checkpoint.
-            new_versions: New channel versions as of this write.
+            config (RunnableConfig): Configuration for the checkpoint.
+            checkpoint (Checkpoint): The checkpoint data to store.
+            metadata (CheckpointMetadata): Metadata associated with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
 
         Returns:
-            Updated configuration with the new checkpoint_id.
+            RunnableConfig: Updated configuration with the new checkpoint_id.
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -632,10 +661,13 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Store intermediate writes linked to a checkpoint asynchronously.
 
         Args:
-            config: Configuration of the related checkpoint.
-            writes: List of (channel, value) pairs to store.
-            task_id: Identifier for the task creating the writes.
-            task_path: Path of the task creating the writes.
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[tuple[str, Any]]): List of (channel, value) pairs to store.
+            task_id (str): Identifier for the task creating the writes.
+            task_path (str): Path of the task creating the writes.
+
+        Returns:
+            None: Nothing is returned.
         """
         async with self.lock:
             await asyncio.to_thread(
@@ -689,7 +721,10 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Delete all checkpoints and writes for a thread asynchronously.
 
         Args:
-            thread_id: The thread ID to delete.
+            thread_id (str): The thread ID to delete.
+
+        Returns:
+            None: Nothing is returned.
         """
         async with self.lock:
             await asyncio.to_thread(self._delete_thread_sync, thread_id)
@@ -721,10 +756,15 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Delete checkpoints older than max_age asynchronously.
 
         Args:
-            max_age: Maximum age of checkpoints to keep.
+            max_age (timedelta): Maximum age of checkpoints to keep.
 
         Returns:
-            Number of checkpoints deleted.
+            int: Number of checkpoints deleted.
+
+        Example:
+            >>> from datetime import timedelta
+            >>> deleted = await checkpointer.adelete_before(timedelta(days=7))
+            >>> print(f"Deleted {deleted} old checkpoints")
         """
         async with self.lock:
             return await asyncio.to_thread(self._delete_before_sync, max_age)
@@ -765,7 +805,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Get the total number of checkpoints asynchronously.
 
         Returns:
-            Total number of checkpoints in the database.
+            int: Total number of checkpoints in the database.
         """
         async with self.lock:
             return await asyncio.to_thread(self._get_checkpoint_count_sync)
@@ -787,7 +827,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Get current metrics statistics.
 
         Returns:
-            Dictionary of metrics if enabled, None otherwise.
+            dict[str, Any] | None: Dictionary of metrics if enabled, None otherwise.
         """
         if self.metrics:
             return self.metrics.get_stats()
@@ -797,7 +837,7 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Get Redis write-back cache statistics.
 
         Returns:
-            Dictionary with Redis cache stats if enabled, None otherwise.
+            dict[str, Any] | None: Dictionary with Redis cache stats if enabled, None otherwise.
         """
         if self._redis_cache:
             return self._redis_cache.get_stats()
@@ -809,10 +849,10 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         Forces immediate sync of all pending writes to Snowflake.
 
         Args:
-            timeout: Max time to wait for flush (seconds).
+            timeout (float): Max time to wait for flush (seconds).
 
         Returns:
-            Number of checkpoints flushed.
+            int: Number of checkpoints flushed.
         """
         if self._redis_cache:
             return await asyncio.to_thread(self._redis_cache.flush, timeout)
@@ -823,7 +863,10 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
         """Shutdown Redis write cache gracefully.
 
         Args:
-            flush_timeout: Max time to wait for flush (seconds).
+            flush_timeout (float): Max time to wait for flush (seconds).
+
+        Returns:
+            None: Nothing is returned.
         """
         if self._redis_cache:
             await asyncio.to_thread(self._redis_cache.shutdown, flush_timeout)
@@ -967,6 +1010,18 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
 
         Note: By default, this method is for use from background threads only.
         Set allow_sync_from_async=True to enable calls from async context.
+
+        Args:
+            config (RunnableConfig): Configuration specifying which checkpoint to retrieve.
+                Must contain `thread_id` in configurable. Optionally contains
+                `checkpoint_ns` and `checkpoint_id`.
+
+        Returns:
+            CheckpointTuple | None: The checkpoint tuple if found, None otherwise.
+
+        Raises:
+            asyncio.InvalidStateError: If called from the same thread as the event loop
+                without allow_sync_from_async=True.
         """
         result: CheckpointTuple | None = self._run_sync(self.aget_tuple(config))
         return result
@@ -983,6 +1038,19 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
 
         Note: By default, this method is for use from background threads only.
         Set allow_sync_from_async=True to enable calls from async context.
+
+        Args:
+            config (RunnableConfig | None): Configuration for filtering by thread_id and checkpoint_ns.
+            filter (dict[str, Any] | None): Additional metadata filters.
+            before (RunnableConfig | None): Only return checkpoints before this one.
+            limit (int | None): Maximum number of checkpoints to return.
+
+        Yields:
+            CheckpointTuple: Matching checkpoint tuples, ordered by checkpoint_id descending.
+
+        Raises:
+            asyncio.InvalidStateError: If called from the same thread as the event loop
+                without allow_sync_from_async=True.
         """
         if self._allow_sync_from_async:
             self._ensure_nest_asyncio()
@@ -1034,6 +1102,19 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
 
         Note: By default, this method is for use from background threads only.
         Set allow_sync_from_async=True to enable calls from async context.
+
+        Args:
+            config (RunnableConfig): Configuration for the checkpoint.
+            checkpoint (Checkpoint): The checkpoint data to store.
+            metadata (CheckpointMetadata): Metadata associated with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+
+        Returns:
+            RunnableConfig: Updated configuration with the new checkpoint_id.
+
+        Raises:
+            asyncio.InvalidStateError: If called from the same thread as the event loop
+                without allow_sync_from_async=True.
         """
         result: RunnableConfig = self._run_sync(
             self.aput(config, checkpoint, metadata, new_versions)
@@ -1051,6 +1132,19 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
 
         Note: By default, this method is for use from background threads only.
         Set allow_sync_from_async=True to enable calls from async context.
+
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[tuple[str, Any]]): List of (channel, value) pairs to store.
+            task_id (str): Identifier for the task creating the writes.
+            task_path (str): Path of the task creating the writes.
+
+        Returns:
+            None: Nothing is returned.
+
+        Raises:
+            asyncio.InvalidStateError: If called from the same thread as the event loop
+                without allow_sync_from_async=True.
         """
         self._run_sync(self.aput_writes(config, writes, task_id, task_path))
 
@@ -1059,6 +1153,16 @@ class AsyncSnowflakeSaver(BaseSnowflakeSaver):
 
         Note: By default, this method is for use from background threads only.
         Set allow_sync_from_async=True to enable calls from async context.
+
+        Args:
+            thread_id (str): The thread ID to delete.
+
+        Returns:
+            None: Nothing is returned.
+
+        Raises:
+            asyncio.InvalidStateError: If called from the same thread as the event loop
+                without allow_sync_from_async=True.
         """
         self._run_sync(self.adelete_thread(thread_id))
 
