@@ -118,12 +118,12 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         - Optional Redis/Valkey write-back cache for 100x faster writes
 
     Args:
-        conn: A Snowflake connection object.
-        serde: Optional serializer for checkpoint data.
-        retry_config: Optional retry configuration.
-        metrics: Optional metrics collector.
-        cache_config: Optional cache configuration for in-memory caching.
-        redis_cache_config: Optional Redis write-back cache configuration.
+        conn (Conn): A Snowflake connection object.
+        serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+        retry_config (RetryConfig | None): Optional retry configuration.
+        metrics (Metrics | None): Optional metrics collector.
+        cache_config (CacheConfig | None): Optional cache configuration for in-memory caching.
+        redis_cache_config (RedisWriteCacheConfig | None): Optional Redis write-back cache configuration.
 
     Example:
         >>> import snowflake.connector
@@ -173,6 +173,16 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         cache_config: CacheConfig | None = None,
         redis_cache_config: RedisWriteCacheConfig | None = None,
     ) -> None:
+        """Create a SnowflakeSaver.
+
+        Args:
+            conn (Conn): A Snowflake connection object.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+            retry_config (RetryConfig | None): Optional retry configuration.
+            metrics (Metrics | None): Optional metrics collector.
+            cache_config (CacheConfig | None): Optional cache configuration for in-memory caching.
+            redis_cache_config (RedisWriteCacheConfig | None): Optional Redis write-back cache configuration.
+        """
         super().__init__(serde=serde)
         self.conn = conn
         self.lock = threading.Lock()
@@ -212,19 +222,19 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Create a SnowflakeSaver from connection parameters.
 
         Args:
-            account: Snowflake account identifier.
-            user: Username for authentication.
-            password: Password for authentication.
-            warehouse: Warehouse to use.
-            database: Database to use.
-            schema: Schema to use.
-            role: Optional role to use.
-            authenticator: Optional authenticator method.
-            serde: Optional serializer for checkpoint data.
-            **kwargs: Additional connection parameters.
+            account (str): Snowflake account identifier.
+            user (str): Username for authentication.
+            password (str): Password for authentication.
+            warehouse (str): Warehouse to use.
+            database (str): Database to use.
+            schema (str): Schema to use.
+            role (str | None): Optional role to use.
+            authenticator (str | None): Optional authenticator method.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+            **kwargs (Any): Additional connection parameters.
 
         Yields:
-            A configured SnowflakeSaver instance.
+            Iterator[SnowflakeSaver]: A configured SnowflakeSaver instance.
 
         Example:
             >>> with SnowflakeSaver.from_conn_string(
@@ -263,6 +273,9 @@ class SnowflakeSaver(BaseSnowflakeSaver):
     ) -> Iterator[SnowflakeSaver]:
         """Create a SnowflakeSaver from environment variables.
 
+        Args:
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+
         Required environment variables:
             - SNOWFLAKE_ACCOUNT
             - SNOWFLAKE_USER
@@ -281,7 +294,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
             - SNOWFLAKE_PRIVATE_KEY_PASSPHRASE (for encrypted private keys)
 
         Yields:
-            A configured SnowflakeSaver instance.
+            Iterator[SnowflakeSaver]: A configured SnowflakeSaver instance.
         """
         params = get_connection_params_from_env()
         conn = create_connection(**params)
@@ -313,20 +326,20 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         environments as it avoids storing passwords.
 
         Args:
-            account: Snowflake account identifier.
-            user: Username for authentication.
-            warehouse: Warehouse to use.
-            database: Database to use.
-            schema: Schema to use.
-            private_key_path: Path to PEM-encoded private key file.
-            private_key: PEM-encoded private key as string or bytes.
-            private_key_passphrase: Passphrase for encrypted private keys.
-            role: Optional role to use.
-            serde: Optional serializer for checkpoint data.
-            **kwargs: Additional connection parameters.
+            account (str): Snowflake account identifier.
+            user (str): Username for authentication.
+            warehouse (str): Warehouse to use.
+            database (str): Database to use.
+            schema (str): Schema to use.
+            private_key_path (str | None): Path to PEM-encoded private key file.
+            private_key (str | bytes | None): PEM-encoded private key as string or bytes.
+            private_key_passphrase (str | None): Passphrase for encrypted private keys.
+            role (str | None): Optional role to use.
+            serde (SerializerProtocol | None): Optional serializer for checkpoint data.
+            **kwargs (Any): Additional connection parameters.
 
         Yields:
-            A configured SnowflakeSaver instance.
+            Iterator[SnowflakeSaver]: A configured SnowflakeSaver instance.
 
         Example:
             >>> with SnowflakeSaver.from_key_pair(
@@ -368,6 +381,9 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         before using the checkpointer for the first time.
 
         This method is idempotent and safe to call multiple times.
+
+        Returns:
+            None: No return value.
         """
         if self.is_setup:
             return
@@ -415,12 +431,22 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         Checks caches in order: Redis write cache -> LRU read cache -> Snowflake.
 
         Args:
-            config: Configuration specifying which checkpoint to retrieve.
+            config (RunnableConfig): Configuration specifying which checkpoint to retrieve.
                 Must contain `thread_id` in configurable. Optionally contains
                 `checkpoint_ns` and `checkpoint_id`.
 
         Returns:
-            The checkpoint tuple if found, None otherwise.
+            CheckpointTuple | None: The checkpoint tuple if found, None otherwise.
+
+        Raises:
+            SnowflakeConnectionError: If database connection fails.
+            SnowflakeQueryError: If query execution fails.
+
+        Example:
+            >>> config = {"configurable": {"thread_id": "my-thread"}}
+            >>> checkpoint = saver.get_tuple(config)
+            >>> if checkpoint:
+            ...     print(checkpoint.checkpoint["id"])
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_id = get_checkpoint_id(config)
@@ -495,13 +521,13 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """List checkpoints matching the given criteria.
 
         Args:
-            config: Configuration for filtering by thread_id and checkpoint_ns.
-            filter: Additional metadata filters.
-            before: Only return checkpoints before this one.
-            limit: Maximum number of checkpoints to return.
+            config (RunnableConfig | None): Configuration for filtering by thread_id and checkpoint_ns.
+            filter (dict[str, Any] | None): Additional metadata filters.
+            before (RunnableConfig | None): Only return checkpoints before this one.
+            limit (int | None): Maximum number of checkpoints to return.
 
         Yields:
-            Matching checkpoint tuples, ordered by checkpoint_id descending.
+            Iterator[CheckpointTuple]: Matching checkpoint tuples, ordered by checkpoint_id descending.
         """
         where, params = self._search_where(config, filter, before)
         query = self.SELECT_SQL + where + " ORDER BY c.checkpoint_id DESC"
@@ -530,13 +556,13 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         Invalidates cached entries for this thread to ensure consistency.
 
         Args:
-            config: Configuration for the checkpoint.
-            checkpoint: The checkpoint data to store.
-            metadata: Metadata associated with the checkpoint.
-            new_versions: New channel versions as of this write.
+            config (RunnableConfig): Configuration for the checkpoint.
+            checkpoint (Checkpoint): The checkpoint data to store.
+            metadata (CheckpointMetadata): Metadata associated with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
 
         Returns:
-            Updated configuration with the new checkpoint_id.
+            RunnableConfig: Updated configuration with the new checkpoint_id.
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -637,10 +663,13 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         storing multiple writes.
 
         Args:
-            config: Configuration of the related checkpoint.
-            writes: List of (channel, value) pairs to store.
-            task_id: Identifier for the task creating the writes.
-            task_path: Path of the task creating the writes.
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[tuple[str, Any]]): List of (channel, value) pairs to store.
+            task_id (str): Identifier for the task creating the writes.
+            task_path (str): Path of the task creating the writes.
+
+        Returns:
+            None: No return value.
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -695,7 +724,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         Also invalidates any cached entries for this thread.
 
         Args:
-            thread_id: The thread ID to delete.
+            thread_id (str): The thread ID to delete.
+
+        Returns:
+            None: No return value.
         """
         # Invalidate cache for this thread
         self._cache.invalidate(thread_id)
@@ -728,10 +760,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         checkpoints that are older than the specified duration.
 
         Args:
-            max_age: Maximum age of checkpoints to keep.
+            max_age (timedelta): Maximum age of checkpoints to keep.
 
         Returns:
-            Number of checkpoints deleted.
+            int: Number of checkpoints deleted.
 
         Example:
             >>> from datetime import timedelta
@@ -778,7 +810,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get the total number of checkpoints.
 
         Returns:
-            Total number of checkpoints in the database.
+            int: Total number of checkpoints in the database.
         """
         with timed_operation(self.metrics, "get_checkpoint_count"):
             with self.lock, get_cursor(self.conn) as cur:
@@ -797,10 +829,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get checkpoint counts grouped by thread.
 
         Args:
-            max_results: Maximum number of threads to return.
+            max_results (int): Maximum number of threads to return.
 
         Returns:
-            List of (thread_id, count) tuples, ordered by count descending.
+            list[tuple[str, int]]: List of (thread_id, count) tuples, ordered by count descending.
         """
         with timed_operation(self.metrics, "get_checkpoint_counts_by_thread"):
             with self.lock, get_cursor(self.conn) as cur:
@@ -819,10 +851,10 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         as it batches the delete operations.
 
         Args:
-            thread_ids: List of thread IDs to delete.
+            thread_ids (list[str]): List of thread IDs to delete.
 
         Returns:
-            Number of threads deleted.
+            int: Number of threads deleted.
         """
         if not thread_ids:
             return 0
@@ -862,7 +894,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get current metrics statistics.
 
         Returns:
-            Dictionary of metrics if enabled, None otherwise.
+            dict[str, Any] | None: Dictionary of metrics if enabled, None otherwise.
         """
         if self.metrics:
             return self.metrics.get_stats()
@@ -872,7 +904,7 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Get LRU cache statistics.
 
         Returns:
-            Dictionary with cache hit/miss counts and hit rate.
+            dict[str, Any]: Dictionary with cache hit/miss counts and hit rate.
 
         Example:
             >>> stats = checkpointer.get_cache_stats()
@@ -884,6 +916,9 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         """Clear the in-memory LRU cache.
 
         This forces subsequent get_tuple calls to query the database.
+
+        Returns:
+            None: No return value.
         """
         self._cache.clear()
 
@@ -998,13 +1033,13 @@ class SnowflakeSaver(BaseSnowflakeSaver):
         identify performance characteristics and bottlenecks.
 
         Args:
-            thread_id: Thread ID to use for benchmark (will be cleaned up).
-            iterations: Number of iterations per operation.
-            warmup: Number of warmup iterations.
-            payload_size: Size of test payload in bytes.
+            thread_id (str): Thread ID to use for benchmark (will be cleaned up).
+            iterations (int): Number of iterations per operation.
+            warmup (int): Number of warmup iterations.
+            payload_size (int): Size of test payload in bytes.
 
         Returns:
-            Dictionary mapping operation names to BenchmarkResult objects.
+            dict[str, BenchmarkResult]: Dictionary mapping operation names to BenchmarkResult objects.
 
         Example:
             >>> results = checkpointer.benchmark(iterations=50)
